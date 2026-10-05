@@ -266,6 +266,27 @@ class MultipartDecoder:
                     self._last_partial_boundary_index(data[data_start:]) + data_start
                 )
             more_data = match is None
+
+        # ``_last_partial_boundary_index`` can place ``data_end`` just
+        # after the CR of a still-incomplete ``CRLF--boundary`` when the
+        # buffer is only slightly longer than that delimiter. The CR is
+        # then returned as field data. Hold it back only when the bytes
+        # after it are a prefix of, or already start, ``LF--boundary``.
+        # A CR that is real field data (followed by something else) is
+        # left alone. See #3285.
+        if (
+            more_data
+            and not self.complete
+            and data_end > data_start
+            and data[data_end - 1] == 0x0D
+        ):
+            suffix = bytes(data[data_end:])
+            delimiter = b"\n--" + self.boundary
+            if suffix.startswith(delimiter) or (
+                suffix.startswith(b"\n") and delimiter.startswith(suffix)
+            ):
+                data_end -= 1
+                del_index -= 1
         return bytes(data[data_start:data_end]), del_index, more_data
 
     def _last_partial_boundary_index(self, data: bytes | bytearray) -> int:

@@ -180,3 +180,53 @@ Content-Type: text/plain; charset="UTF-8"
     for event in events:
         result += encoder.send_event(event)
     assert data == result
+
+
+def _collect_data(decoder: MultipartDecoder, chunks: list[bytes]) -> bytes:
+    data = bytearray()
+    index = 0
+    saw_end = False
+    while True:
+        event = decoder.next_event()
+        if isinstance(event, NeedData):
+            if index < len(chunks):
+                decoder.receive_data(chunks[index])
+                index += 1
+            elif not saw_end:
+                decoder.receive_data(None)
+                saw_end = True
+            else:
+                break
+            continue
+        if isinstance(event, Data):
+            data.extend(event.data)
+        if isinstance(event, Epilogue):
+            break
+    return bytes(data)
+
+
+def test_empty_field_chunked_near_closing_boundary() -> None:
+    """A CR that begins the closing boundary must not be emitted as field data.
+
+    See #3285. The same body parsed in one shot and one byte at a time, and
+    split so the boundary crosses a buffer, must produce an empty value.
+    """
+    boundary = b"WZBOUND"
+    body = (
+        b'--WZBOUND\r\nContent-Disposition: form-data; name="a"\r\n\r\n'
+        b"\r\n--WZBOUND--\r\n"
+    )
+    assert _collect_data(MultipartDecoder(boundary), [body]) == b""
+    assert (
+        _collect_data(
+            MultipartDecoder(boundary), [body[i : i + 1] for i in range(len(body))]
+        )
+        == b""
+    )
+    split = body.index(b"\r\n--WZBOUND--")
+    assert (
+        _collect_data(
+            MultipartDecoder(boundary), [body[: split + 1], body[split + 1 :]]
+        )
+        == b""
+    )
